@@ -13,6 +13,7 @@ import {
   ConversationProvider,
   useConversation,
 } from "@elevenlabs/react";
+import type { DisconnectionDetails } from "@elevenlabs/client";
 import type { AgentMode, HCP, BriefingContext } from "@/lib/types";
 import {
   buildBriefingPrompt,
@@ -41,44 +42,58 @@ function VoiceWidgetInner({
   const [transcript, setTranscript] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const transcriptRef = useRef<string[]>([]);
-  // Track whether the session ended cleanly (no error, agent actually spoke)
-  const sessionErrorRef = useRef<boolean>(false);
 
   const conversation = useConversation({
     onConnect: () => {
       console.log(`[Rova] ${mode} agent connected`);
       setError(null);
-      sessionErrorRef.current = false;
     },
-    onDisconnect: () => {
-      console.log(`[Rova] ${mode} agent disconnected`);
+    onDisconnect: (details: DisconnectionDetails) => {
+      console.log(`[Rova] ${mode} agent disconnected — reason: ${details.reason}`, details);
       const hadContent = transcriptRef.current.length > 0;
-      const hadError = sessionErrorRef.current;
 
-      if (mode === "debrief" && hadContent && !hadError) {
+      if (details.reason === "error") {
+        // The SDK tells us exactly why it failed
+        const closeInfo =
+          "closeCode" in details && details.closeCode
+            ? ` (code ${details.closeCode}${details.closeReason ? `: ${details.closeReason}` : ""})`
+            : "";
+        const errMsg =
+          "message" in details && details.message
+            ? details.message
+            : "Voice agent disconnected unexpectedly.";
+        console.error(`[Rova] disconnect error${closeInfo}:`, errMsg);
+        setError(`${errMsg}${closeInfo} — check mic permissions and try again.`);
+        return; // Don't advance status on error disconnect
+      }
+
+      // Clean disconnect ("agent" ended it or "user" ended it)
+      if (mode === "debrief" && hadContent) {
         onDebriefComplete?.(transcriptRef.current.join("\n"));
       }
-      // Only mark briefing complete if the agent actually delivered content
-      // (prevents premature status change when mic is stolen or session errors out)
-      if (mode === "briefing" && hadContent && !hadError) {
-        onBriefingComplete?.();
-      } else if (mode === "briefing" && !hadContent) {
-        setError(
-          "Briefing ended before the agent could speak. " +
-          "If another app (e.g. Notion) is using your microphone, close it and try again."
-        );
+      if (mode === "briefing") {
+        if (hadContent) {
+          onBriefingComplete?.();
+        } else {
+          // Session connected and closed cleanly but agent never spoke —
+          // likely a mic/audio pipeline issue on this machine.
+          setError(
+            "Session ended before the agent could speak. " +
+            "Check that your browser has microphone permission and no other app is capturing audio."
+          );
+        }
       }
     },
     onError: (err) => {
-      console.error(`[Rova] ${mode} error:`, err);
-      sessionErrorRef.current = true;
-      setError("Voice agent encountered an error. Please try again.");
+      // onError fires before onDisconnect for fatal errors; log it but
+      // let onDisconnect (with reason:"error") set the UI message.
+      console.error(`[Rova] ${mode} SDK error:`, err);
     },
     onMessage: (message) => {
-      // Capture transcript lines from the conversation
-      const role = message.role === "user" ? "Rep" : "Rova";
+      // role: "user" | "agent"  (source is deprecated)
+      const label = message.role === "user" ? "Rep" : "Rova";
       if (message.message) {
-        const line = `${role}: ${message.message}`;
+        const line = `${label}: ${message.message}`;
         transcriptRef.current = [...transcriptRef.current, line];
         setTranscript((prev) => [...prev, line]);
       }
@@ -97,7 +112,20 @@ function VoiceWidgetInner({
       setError(null);
       setTranscript([]);
       transcriptRef.current = [];
-      sessionErrorRef.current = false;
+
+      // Pre-check microphone permission before touching ElevenLabs.
+      // This surfaces "Permission denied" clearly instead of a cryptic WS close.
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
+      } catch (micErr) {
+        const label =
+          micErr instanceof DOMException && micErr.name === "NotAllowedError"
+            ? "Microphone access denied — allow it in your browser's address-bar permissions."
+            : "Microphone unavailable — check system settings.";
+        setError(label);
+        return;
+      }
 
       // Fetch signed URL
       const urlRes = await fetch("/api/signed-url");
