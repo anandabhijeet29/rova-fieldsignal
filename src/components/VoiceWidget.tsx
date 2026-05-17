@@ -41,23 +41,37 @@ function VoiceWidgetInner({
   const [transcript, setTranscript] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const transcriptRef = useRef<string[]>([]);
+  // Track whether the session ended cleanly (no error, agent actually spoke)
+  const sessionErrorRef = useRef<boolean>(false);
 
   const conversation = useConversation({
     onConnect: () => {
       console.log(`[Rova] ${mode} agent connected`);
       setError(null);
+      sessionErrorRef.current = false;
     },
     onDisconnect: () => {
       console.log(`[Rova] ${mode} agent disconnected`);
-      if (mode === "debrief" && transcriptRef.current.length > 0) {
+      const hadContent = transcriptRef.current.length > 0;
+      const hadError = sessionErrorRef.current;
+
+      if (mode === "debrief" && hadContent && !hadError) {
         onDebriefComplete?.(transcriptRef.current.join("\n"));
       }
-      if (mode === "briefing") {
+      // Only mark briefing complete if the agent actually delivered content
+      // (prevents premature status change when mic is stolen or session errors out)
+      if (mode === "briefing" && hadContent && !hadError) {
         onBriefingComplete?.();
+      } else if (mode === "briefing" && !hadContent) {
+        setError(
+          "Briefing ended before the agent could speak. " +
+          "If another app (e.g. Notion) is using your microphone, close it and try again."
+        );
       }
     },
     onError: (err) => {
       console.error(`[Rova] ${mode} error:`, err);
+      sessionErrorRef.current = true;
       setError("Voice agent encountered an error. Please try again.");
     },
     onMessage: (message) => {
@@ -83,6 +97,7 @@ function VoiceWidgetInner({
       setError(null);
       setTranscript([]);
       transcriptRef.current = [];
+      sessionErrorRef.current = false;
 
       // Fetch signed URL
       const urlRes = await fetch("/api/signed-url");

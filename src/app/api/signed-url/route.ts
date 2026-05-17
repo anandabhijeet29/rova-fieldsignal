@@ -30,10 +30,10 @@ export async function GET() {
     );
 
     if (!response.ok) {
-      const error = await response.text();
-      console.error("ElevenLabs signed URL error:", error);
+      const errorBody = await response.text();
+      console.error("ElevenLabs signed URL error:", response.status, errorBody);
       return NextResponse.json(
-        { error: "Failed to generate signed URL" },
+        { error: "Failed to generate signed URL", status: response.status, detail: errorBody },
         { status: response.status }
       );
     }

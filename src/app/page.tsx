@@ -8,8 +8,9 @@
 import DayTimeline from "@/components/DayTimeline";
 
 export default function Home() {
-  // Use today's date for the demo
-  const today = new Date().toISOString().split("T")[0];
+  // Use local date (not UTC) to match Supabase CURRENT_DATE
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
