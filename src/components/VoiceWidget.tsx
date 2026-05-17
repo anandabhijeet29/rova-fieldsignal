@@ -54,16 +54,25 @@ function VoiceWidgetInner({
 
       if (details.reason === "error") {
         // The SDK tells us exactly why it failed
-        const closeInfo =
-          "closeCode" in details && details.closeCode
-            ? ` (code ${details.closeCode}${details.closeReason ? `: ${details.closeReason}` : ""})`
-            : "";
+        const closeCode = "closeCode" in details ? details.closeCode : undefined;
+        const closeReason = "closeReason" in details ? details.closeReason : undefined;
         const errMsg =
           "message" in details && details.message
             ? details.message
             : "Voice agent disconnected unexpectedly.";
-        console.error(`[Rova] disconnect error${closeInfo}:`, errMsg);
-        setError(`${errMsg}${closeInfo} — check mic permissions and try again.`);
+        console.error(`[Rova] disconnect error (code ${closeCode}):`, errMsg);
+
+        // Give actionable advice based on the close code
+        let hint = "Please try again.";
+        if (closeCode === 1008 && closeReason?.includes("quota")) {
+          hint = "Your ElevenLabs quota is exhausted — upgrade your plan or wait for it to reset.";
+        } else if (closeCode === 1008) {
+          hint = "Check your ElevenLabs agent configuration.";
+        } else if (closeCode === 1006 || closeCode === 1001) {
+          hint = "Check your internet connection and try again.";
+        }
+
+        setError(`${errMsg} ${hint}`);
         return; // Don't advance status on error disconnect
       }
 
@@ -132,7 +141,9 @@ function VoiceWidgetInner({
       if (!urlRes.ok) throw new Error("Failed to get signed URL");
       const { signed_url } = await urlRes.json();
 
-      // Build prompt based on mode
+      // Build dynamic prompt + first message based on mode.
+      // Both "First message" and "System prompt" overrides are enabled
+      // in the ElevenLabs agent Security → Overrides config.
       const systemPrompt =
         mode === "briefing" && briefingContext
           ? buildBriefingPrompt(briefingContext)
@@ -143,7 +154,7 @@ function VoiceWidgetInner({
           ? buildBriefingFirstMessage(hcp)
           : buildDebriefFirstMessage(hcp);
 
-      // Start the conversation
+      // Start the conversation with per-HCP overrides
       conversation.startSession({
         signedUrl: signed_url,
         overrides: {
