@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
       const extractionPrompt = buildExtractionPrompt(transcript, hcpName);
 
       const extraction = await anthropic.messages.create({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5",
         max_tokens: 1024,
         messages: [{ role: "user", content: extractionPrompt }],
       });
@@ -73,8 +73,8 @@ export async function POST(request: NextRequest) {
 
       extractedData = JSON.parse(jsonText) as ExtractedData;
     } catch (extractionError) {
-      console.error("Extraction failed, saving raw transcript:", extractionError);
-      // Continue — save what we have (error handling per eng plan)
+      console.error("[Rova] Extraction failed:", extractionError);
+      // Continue — save raw transcript even if extraction fails
     }
 
     // Step 4: Generate cross-visit summary (D9: pre-computed generic summary)
@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
         );
 
         const summary = await anthropic.messages.create({
-          model: "claude-sonnet-4-20250514",
+          model: "claude-sonnet-4-5",
           max_tokens: 256,
           messages: [{ role: "user", content: summaryPrompt }],
         });

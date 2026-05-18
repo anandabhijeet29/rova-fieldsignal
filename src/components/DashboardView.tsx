@@ -3,40 +3,84 @@
 /**
  * DashboardView — Manager dashboard with real-time updates (Step 7).
  *
- * Shows:
- *   - Per-visit: HCP name, status, extracted sentiment, top objections, follow-ups
- *   - Territory-level: trending objections, competitive mentions, prescription trends
- *   - Updates within ~5s of each debrief completing (Supabase real-time, D15)
+ * Layout:
+ *   - Today's summary stat bar (today-only numbers)
+ *   - Today's visit cards (extracted sentiment, objections, follow-ups)
+ *   - Per-HCP history accordion (most-recent prior visit per doctor)
+ *   - Territory intelligence panels
+ *
+ * Updates within ~5s of each debrief completing (Supabase real-time).
  */
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { subscribeToVisitChanges } from "@/lib/db";
-import type {
-  Visit,
-  HCP,
-  Territory,
-  ExtractedData,
-  VisitStatus,
-} from "@/lib/types";
+import type { Visit, HCP, Territory, ExtractedData, VisitStatus } from "@/lib/types";
 
 interface VisitWithHcp extends Visit {
   hcp: HCP;
 }
 
+// ── helpers ──────────────────────────────────────────────────────────
+
+function localToday(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function formatDate(dateStr: string): string {
+  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function sentimentColor(s: string | undefined) {
+  if (s === "positive") return "text-emerald-600";
+  if (s === "negative") return "text-red-600";
+  return "text-zinc-500";
+}
+
+function rxColor(r: string | undefined) {
+  if (r === "likely") return "text-emerald-600";
+  if (r === "unlikely") return "text-red-600";
+  return "text-zinc-500";
+}
+
+function calculateAvgSentiment(visits: VisitWithHcp[]): string {
+  const scores: number[] = visits
+    .filter((v) => v.extracted_data)
+    .map((v) => {
+      switch (v.extracted_data!.sentiment) {
+        case "positive": return 1;
+        case "negative": return -1;
+        default: return 0;
+      }
+    });
+  if (scores.length === 0) return "—";
+  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+  if (avg > 0.3) return "Positive";
+  if (avg < -0.3) return "Negative";
+  return "Neutral";
+}
+
+// ── main component ───────────────────────────────────────────────────
+
 export default function DashboardView() {
   const [visits, setVisits] = useState<VisitWithHcp[]>([]);
   const [territory, setTerritory] = useState<Territory | null>(null);
   const [loading, setLoading] = useState(true);
+  const today = localToday();
 
-  // Initial data load
+  // Initial load — all visits + territory
   useEffect(() => {
     async function load() {
       const [visitsRes, territoryRes] = await Promise.all([
         supabase
           .from("visits")
           .select("*, hcp:hcps(*)")
-          .order("visit_date", { ascending: true })
+          .order("visit_date", { ascending: false })
           .order("visit_order", { ascending: true }),
         supabase.from("territory").select("*").limit(1).single(),
       ]);
@@ -49,29 +93,22 @@ export default function DashboardView() {
           })) as VisitWithHcp[]
         );
       }
-
-      if (territoryRes.data) {
-        setTerritory(territoryRes.data as Territory);
-      }
-
+      if (territoryRes.data) setTerritory(territoryRes.data as Territory);
       setLoading(false);
     }
     load();
   }, []);
 
-  // Real-time subscription for visit changes
+  // Real-time — merge updated row back into state
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
     const unsubscribe = subscribeToVisitChanges(today, (updated) => {
-      const updatedVisit = updated as unknown as Visit;
+      const u = updated as unknown as Visit;
       setVisits((prev) =>
-        prev.map((v) =>
-          v.id === updatedVisit.id ? { ...v, ...updatedVisit } : v
-        )
+        prev.map((v) => (v.id === u.id ? { ...v, ...u } : v))
       );
     });
     return unsubscribe;
-  }, []);
+  }, [today]);
 
   if (loading) {
     return (
@@ -81,262 +118,351 @@ export default function DashboardView() {
     );
   }
 
-  const debriefedVisits = visits.filter((v) => v.status === "debriefed");
-  const totalVisits = visits.length;
-  const avgSentiment = calculateSentimentScore(debriefedVisits);
+  const todayVisits = visits.filter((v) => v.visit_date === today);
+  const historyVisits = visits.filter((v) => v.visit_date !== today);
+  const todayDebriefed = todayVisits.filter((v) => v.status === "debriefed");
+
+  // Most-recent prior visit per HCP (for history section)
+  const latestPerHcp = Object.values(
+    historyVisits.reduce<Record<string, VisitWithHcp>>((acc, v) => {
+      if (!acc[v.hcp_id] || v.visit_date > acc[v.hcp_id].visit_date) {
+        acc[v.hcp_id] = v;
+      }
+      return acc;
+    }, {})
+  );
 
   return (
-    <div className="space-y-6">
-      {/* Summary stats */}
+    <div className="space-y-8">
+
+      {/* ── Today's summary bar ── */}
       <div className="grid grid-cols-4 gap-4">
-        <StatCard label="Visits Today" value={`${debriefedVisits.length}/${totalVisits}`} />
-        <StatCard label="Avg Sentiment" value={avgSentiment} />
         <StatCard
-          label="Follow-ups"
+          label="Today's Visits"
+          value={`${todayDebriefed.length} / ${todayVisits.length}`}
+          sub="debriefed"
+        />
+        <StatCard
+          label="Avg Sentiment"
+          value={calculateAvgSentiment(todayDebriefed)}
+          sub="today"
+        />
+        <StatCard
+          label="Follow-ups Created"
           value={String(
-            debriefedVisits.reduce(
-              (sum, v) => sum + (v.extracted_data?.follow_ups?.length ?? 0),
+            todayDebriefed.reduce(
+              (n, v) => n + (v.extracted_data?.follow_ups?.length ?? 0),
               0
             )
           )}
+          sub="today"
         />
         <StatCard
           label="Samples Dropped"
           value={String(
-            debriefedVisits.reduce(
-              (sum, v) => sum + (v.extracted_data?.samples_dropped?.length ?? 0),
+            todayDebriefed.reduce(
+              (n, v) => n + (v.extracted_data?.samples_dropped?.length ?? 0),
               0
             )
           )}
+          sub="today"
         />
       </div>
 
-      {/* Visit cards */}
-      <div>
-        <h3 className="mb-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-          Visit Activity
-        </h3>
-        <div className="space-y-3">
-          {visits.map((visit) => (
-            <VisitCard key={visit.id} visit={visit} />
-          ))}
-        </div>
-      </div>
-
-      {/* Territory intelligence */}
-      {territory && (
-        <div className="grid grid-cols-3 gap-4">
-          {/* Trending objections */}
-          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-              Trending Objections
-            </h4>
-            <div className="space-y-2">
-              {territory.trending_objections.map((obj, i) => (
-                <div key={i} className="flex items-center justify-between text-sm">
-                  <span className="text-zinc-700 dark:text-zinc-300">{obj.objection}</span>
-                  <span
-                    className={`text-xs font-medium ${
-                      obj.trend === "rising"
-                        ? "text-red-600"
-                        : obj.trend === "declining"
-                        ? "text-emerald-600"
-                        : "text-zinc-500"
-                    }`}
-                  >
-                    {obj.trend === "rising" ? "↑" : obj.trend === "declining" ? "↓" : "→"}{" "}
-                    {obj.count}
-                  </span>
-                </div>
-              ))}
-            </div>
+      {/* ── Today's visits ── */}
+      <section>
+        <SectionHeader title="Today's Visits" date={formatDate(today)} count={todayVisits.length} />
+        {todayVisits.length === 0 ? (
+          <EmptyState message="No visits scheduled for today." />
+        ) : (
+          <div className="space-y-3">
+            {todayVisits.map((v) => (
+              <VisitCard key={v.id} visit={v} showDate={false} isToday />
+            ))}
           </div>
+        )}
+      </section>
 
-          {/* Competitive mentions */}
-          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-              Competitive Intel
-            </h4>
-            <div className="space-y-2">
-              {territory.competitive_mentions.map((comp, i) => (
-                <div key={i} className="text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                      {comp.competitor}
-                    </span>
-                    <span className="text-xs text-zinc-500">{comp.mentions} mentions</span>
-                  </div>
-                  <p className="text-xs text-zinc-500">{comp.context}</p>
-                </div>
-              ))}
-            </div>
-          </div>
+      {/* ── Territory intelligence ── */}
+      {territory && <TerritoryPanel territory={territory} />}
 
-          {/* Prescription trends */}
-          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-              Prescription Trends
-            </h4>
-            <div className="space-y-2">
-              {territory.prescription_trends.map((trend, i) => (
-                <div key={i} className="flex items-center justify-between text-sm">
-                  <span className="text-zinc-700 dark:text-zinc-300">{trend.drug_class}</span>
-                  <span
-                    className={`text-xs font-medium ${
-                      trend.trend === "up"
-                        ? "text-emerald-600"
-                        : trend.trend === "down"
-                        ? "text-red-600"
-                        : "text-zinc-500"
-                    }`}
-                  >
-                    {trend.trend === "up" ? "↑" : trend.trend === "down" ? "↓" : "→"}{" "}
-                    {Math.round(trend.intent_rate * 100)}%
-                  </span>
-                </div>
+      {/* ── Prior visit history (one card per HCP, most recent) ── */}
+      {latestPerHcp.length > 0 && (
+        <section>
+          <SectionHeader
+            title="Prior Visit History"
+            sub="Most recent completed visit per HCP"
+            count={latestPerHcp.length}
+          />
+          <div className="space-y-3">
+            {latestPerHcp
+              .sort((a, b) => b.visit_date.localeCompare(a.visit_date))
+              .map((v) => (
+                <VisitCard key={v.id} visit={v} showDate isToday={false} />
               ))}
-            </div>
           </div>
-        </div>
+        </section>
       )}
     </div>
   );
 }
 
-// ── Sub-components ──────────────────────────────────────────────────
+// ── Sub-components ───────────────────────────────────────────────────
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function SectionHeader({
+  title,
+  date,
+  sub,
+  count,
+}: {
+  title: string;
+  date?: string;
+  sub?: string;
+  count?: number;
+}) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-      <p className="text-xs font-medium text-zinc-500">{label}</p>
-      <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{value}</p>
+    <div className="mb-3 flex items-baseline justify-between">
+      <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+        {title}
+        {date && (
+          <span className="ml-2 text-xs font-normal text-zinc-500">{date}</span>
+        )}
+      </h3>
+      <span className="text-xs text-zinc-400">
+        {sub && `${sub} · `}{count !== undefined && `${count} records`}
+      </span>
     </div>
   );
 }
 
-function VisitCard({ visit }: { visit: VisitWithHcp }) {
-  const data = visit.extracted_data;
-  const statusColors: Record<VisitStatus, string> = {
-    upcoming: "bg-zinc-100 text-zinc-600",
-    briefed: "bg-blue-100 text-blue-700",
-    extracting: "bg-amber-100 text-amber-700",
-    debriefed: "bg-emerald-100 text-emerald-700",
-  };
-
+function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex items-start justify-between">
+      <p className="text-xs font-medium text-zinc-500">{label}</p>
+      <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-zinc-400">{sub}</p>}
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <p className="rounded-xl border border-dashed border-zinc-200 p-6 text-center text-sm text-zinc-400 dark:border-zinc-700">
+      {message}
+    </p>
+  );
+}
+
+const STATUS_LABEL: Record<VisitStatus, { text: string; color: string }> = {
+  upcoming:   { text: "Upcoming",   color: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400" },
+  briefed:    { text: "Briefed",    color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
+  extracting: { text: "Processing", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
+  debriefed:  { text: "Complete",   color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
+};
+
+function VisitCard({
+  visit,
+  showDate,
+  isToday,
+}: {
+  visit: VisitWithHcp;
+  showDate: boolean;
+  isToday: boolean;
+}) {
+  const data: ExtractedData | null = visit.extracted_data ?? null;
+  const st = STATUS_LABEL[visit.status];
+
+  return (
+    <div
+      className={`rounded-xl border p-4 ${
+        isToday
+          ? "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"
+          : "border-zinc-100 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60"
+      }`}
+    >
+      {/* Header row */}
+      <div className="flex items-start justify-between gap-2">
         <div>
           <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
             {visit.hcp.name}
           </h4>
-          <p className="text-xs text-zinc-500">{visit.hcp.specialty}</p>
+          <p className="text-xs text-zinc-500">
+            {visit.hcp.specialty}
+            {showDate && (
+              <span className="ml-1.5 text-zinc-400">· {formatDate(visit.visit_date)}</span>
+            )}
+          </p>
         </div>
-        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${statusColors[visit.status]}`}>
-          {visit.status}
+        <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${st.color}`}>
+          {st.text}
         </span>
       </div>
 
-      {data && (
-        <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
-          {/* Sentiment */}
-          <div>
-            <p className="font-medium text-zinc-500">Sentiment</p>
-            <p
-              className={`font-semibold ${
-                data.sentiment === "positive"
-                  ? "text-emerald-600"
-                  : data.sentiment === "negative"
-                  ? "text-red-600"
-                  : "text-zinc-600"
-              }`}
-            >
-              {data.sentiment}
-            </p>
-          </div>
-
-          {/* Rx Intent */}
-          <div>
-            <p className="font-medium text-zinc-500">Rx Intent</p>
-            <p
-              className={`font-semibold ${
-                data.prescription_intent === "likely"
-                  ? "text-emerald-600"
-                  : data.prescription_intent === "unlikely"
-                  ? "text-red-600"
-                  : "text-zinc-600"
-              }`}
-            >
-              {data.prescription_intent}
-            </p>
-          </div>
-
-          {/* Follow-ups count */}
-          <div>
-            <p className="font-medium text-zinc-500">Follow-ups</p>
-            <p className="font-semibold text-zinc-700 dark:text-zinc-300">
-              {data.follow_ups.length}
-            </p>
+      {/* Extracted data grid */}
+      {data ? (
+        <div className="mt-3 space-y-2">
+          {/* Metrics row */}
+          <div className="flex gap-6 text-xs">
+            <span>
+              <span className="text-zinc-400">Sentiment </span>
+              <span className={`font-semibold capitalize ${sentimentColor(data.sentiment)}`}>
+                {data.sentiment}
+              </span>
+            </span>
+            <span>
+              <span className="text-zinc-400">Rx Intent </span>
+              <span className={`font-semibold capitalize ${rxColor(data.prescription_intent)}`}>
+                {data.prescription_intent}
+              </span>
+            </span>
+            <span>
+              <span className="text-zinc-400">Follow-ups </span>
+              <span className="font-semibold text-zinc-700 dark:text-zinc-300">
+                {data.follow_ups.length}
+              </span>
+            </span>
+            <span>
+              <span className="text-zinc-400">Samples </span>
+              <span className="font-semibold text-zinc-700 dark:text-zinc-300">
+                {data.samples_dropped.length}
+              </span>
+            </span>
           </div>
 
           {/* Objections */}
           {data.objections.length > 0 && (
-            <div className="col-span-3">
-              <p className="font-medium text-zinc-500">Objections</p>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {data.objections.map((obj, i) => (
-                  <span
-                    key={i}
-                    className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-300"
-                  >
-                    {obj}
-                  </span>
-                ))}
-              </div>
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-xs text-zinc-400">Objections:</span>
+              {data.objections.map((o, i) => (
+                <span
+                  key={i}
+                  className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-300"
+                >
+                  {o}
+                </span>
+              ))}
             </div>
           )}
 
           {/* Competitive intel */}
           {data.competitive_intel.length > 0 && (
-            <div className="col-span-3">
-              <p className="font-medium text-zinc-500">Competitive Intel</p>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {data.competitive_intel.map((intel, i) => (
-                  <span
-                    key={i}
-                    className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                  >
-                    {intel}
-                  </span>
-                ))}
-              </div>
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-xs text-zinc-400">Competitive:</span>
+              {data.competitive_intel.map((c, i) => (
+                <span
+                  key={i}
+                  className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                >
+                  {c}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Follow-up actions */}
+          {data.follow_ups.length > 0 && (
+            <div className="mt-1 space-y-0.5">
+              <span className="text-xs text-zinc-400">Follow-up actions:</span>
+              {data.follow_ups.map((f, i) => (
+                <div key={i} className="flex items-start gap-1.5 text-xs">
+                  <span className="mt-0.5 text-zinc-300">→</span>
+                  <span className="text-zinc-600 dark:text-zinc-400">{f.action}</span>
+                  {f.due_date && (
+                    <span className="ml-auto shrink-0 text-zinc-400">{f.due_date}</span>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>
+      ) : (
+        visit.status !== "upcoming" && (
+          <p className="mt-2 text-xs text-zinc-400 italic">
+            {visit.status === "extracting" ? "Processing debrief…" : "No extracted data available."}
+          </p>
+        )
       )}
     </div>
   );
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────
+function TerritoryPanel({ territory }: { territory: Territory }) {
+  return (
+    <section>
+      <SectionHeader title="Territory Intelligence" sub="Northeast" />
+      <div className="grid grid-cols-3 gap-4">
+        {/* Trending objections */}
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Trending Objections
+          </h4>
+          <div className="space-y-2">
+            {territory.trending_objections.map((obj, i) => (
+              <div key={i} className="flex items-center justify-between text-sm">
+                <span className="text-zinc-700 dark:text-zinc-300">{obj.objection}</span>
+                <span
+                  className={`text-xs font-medium ${
+                    obj.trend === "rising"
+                      ? "text-red-600"
+                      : obj.trend === "declining"
+                      ? "text-emerald-600"
+                      : "text-zinc-500"
+                  }`}
+                >
+                  {obj.trend === "rising" ? "↑" : obj.trend === "declining" ? "↓" : "→"}{" "}
+                  {obj.count}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
 
-function calculateSentimentScore(visits: VisitWithHcp[]): string {
-  if (visits.length === 0) return "—";
+        {/* Competitive intel */}
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Competitive Intel
+          </h4>
+          <div className="space-y-2">
+            {territory.competitive_mentions.map((comp, i) => (
+              <div key={i} className="text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                    {comp.competitor}
+                  </span>
+                  <span className="text-xs text-zinc-500">{comp.mentions} mentions</span>
+                </div>
+                <p className="text-xs text-zinc-500">{comp.context}</p>
+              </div>
+            ))}
+          </div>
+        </div>
 
-  const scores: number[] = visits
-    .filter((v) => v.extracted_data)
-    .map((v) => {
-      switch (v.extracted_data!.sentiment) {
-        case "positive": return 1;
-        case "neutral": return 0;
-        case "negative": return -1;
-      }
-    });
-
-  if (scores.length === 0) return "—";
-
-  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-  if (avg > 0.3) return "Positive";
-  if (avg < -0.3) return "Negative";
-  return "Neutral";
+        {/* Prescription trends */}
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Prescription Trends
+          </h4>
+          <div className="space-y-2">
+            {territory.prescription_trends.map((trend, i) => (
+              <div key={i} className="flex items-center justify-between text-sm">
+                <span className="text-zinc-700 dark:text-zinc-300">{trend.drug_class}</span>
+                <span
+                  className={`text-xs font-medium ${
+                    trend.trend === "up"
+                      ? "text-emerald-600"
+                      : trend.trend === "down"
+                      ? "text-red-600"
+                      : "text-zinc-500"
+                  }`}
+                >
+                  {trend.trend === "up" ? "↑" : trend.trend === "down" ? "↓" : "→"}{" "}
+                  {Math.round(trend.intent_rate * 100)}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
 }
