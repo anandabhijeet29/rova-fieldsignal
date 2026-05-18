@@ -222,7 +222,7 @@ function VoiceWidgetInner({
           <button
             onClick={handleStart}
             disabled={isConnecting}
-            className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isConnecting ? (
               <span className="flex items-center justify-center gap-2">
@@ -240,7 +240,7 @@ function VoiceWidgetInner({
           <>
             <button
               onClick={() => conversation.setMuted(!conversation.isMuted)}
-              className={`rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+              className={`rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
                 conversation.isMuted
                   ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
                   : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
@@ -250,7 +250,7 @@ function VoiceWidgetInner({
             </button>
             <button
               onClick={handleStop}
-              className="flex-1 rounded-lg bg-zinc-800 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-900 dark:bg-zinc-700 dark:hover:bg-zinc-600"
+              className="flex-1 rounded-lg bg-zinc-800 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-900 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:bg-zinc-700 dark:hover:bg-zinc-600"
             >
               End {mode === "briefing" ? "Briefing" : "Debrief"}
             </button>

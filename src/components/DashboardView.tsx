@@ -135,56 +135,54 @@ export default function DashboardView() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-20 md:pb-0">
 
-      {/* ── Stat bar — always visible ── */}
-      <div className="grid grid-cols-4 gap-4">
-        <StatCard
-          label="Today's Visits"
-          value={`${todayDebriefed.length} / ${todayVisits.length}`}
-          sub="debriefed"
+      {/* ── Inline metrics strip — always visible ── */}
+      <div className="flex flex-wrap items-baseline gap-x-8 gap-y-3 border-b border-zinc-200 pb-5 dark:border-zinc-800">
+        <MetricStat
+          value={`${todayDebriefed.length}/${todayVisits.length}`}
+          label="debriefed"
         />
-        <StatCard
-          label="Avg Sentiment"
+        <MetricStat
           value={calculateAvgSentiment(todayDebriefed)}
-          sub="today"
+          label="sentiment"
         />
-        <StatCard
-          label="Follow-ups Created"
+        <MetricStat
           value={String(
             todayDebriefed.reduce(
               (n, v) => n + (v.extracted_data?.follow_ups?.length ?? 0),
               0
             )
           )}
-          sub="today"
+          label="follow-ups"
         />
-        <StatCard
-          label="Samples Dropped"
+        <MetricStat
           value={String(
             todayDebriefed.reduce(
               (n, v) => n + (v.extracted_data?.samples_dropped?.length ?? 0),
               0
             )
           )}
-          sub="today"
+          label="samples"
         />
       </div>
 
-      {/* ── Tab bar ── */}
-      <div className="flex gap-1 rounded-xl border border-zinc-200 bg-zinc-50 p-1 dark:border-zinc-800 dark:bg-zinc-900">
-        <TabButton
-          label="Today"
-          badge={todayVisits.length}
-          active={activeTab === "today"}
-          onClick={() => setActiveTab("today")}
-        />
-        <TabButton
-          label="History"
-          badge={latestPerHcp.length}
-          active={activeTab === "history"}
-          onClick={() => setActiveTab("history")}
-        />
+      {/* ── Tab bar — fixed bottom on mobile, inline on desktop (D8) ── */}
+      <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-zinc-200 bg-white/95 px-4 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-sm md:static md:z-auto md:border-t-0 md:bg-transparent md:px-0 md:pb-0 md:pt-0 md:backdrop-blur-none dark:border-zinc-800 dark:bg-zinc-900/95 md:dark:bg-transparent">
+        <div className="flex gap-1 md:rounded-xl md:border md:border-zinc-200 md:bg-zinc-50 md:p-1 md:dark:border-zinc-800 md:dark:bg-zinc-900">
+          <TabButton
+            label="Today"
+            badge={todayVisits.length}
+            active={activeTab === "today"}
+            onClick={() => setActiveTab("today")}
+          />
+          <TabButton
+            label="History"
+            badge={latestPerHcp.length}
+            active={activeTab === "history"}
+            onClick={() => setActiveTab("history")}
+          />
+        </div>
       </div>
 
       {/* ── Tab: Today ── */}
@@ -193,7 +191,7 @@ export default function DashboardView() {
           <section>
             <SectionHeader title="Today's Visits" date={formatDate(today)} count={todayVisits.length} />
             {todayVisits.length === 0 ? (
-              <EmptyState message="No visits scheduled for today." />
+              <EmptyState message="Waiting for today's first debrief — visits will appear here as the rep completes them." />
             ) : (
               <div className="space-y-3">
                 {todayVisits.map((v) => (
@@ -216,7 +214,7 @@ export default function DashboardView() {
             count={latestPerHcp.length}
           />
           {latestPerHcp.length === 0 ? (
-            <EmptyState message="No prior visit history yet." />
+            <EmptyState message="No visit history yet — data populates after your first completed debrief." />
           ) : (
             <div className="space-y-3">
               {latestPerHcp
@@ -261,12 +259,13 @@ function SectionHeader({
   );
 }
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function MetricStat({ value, label }: { value: string; label: string }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-      <p className="text-xs font-medium text-zinc-500">{label}</p>
-      <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-zinc-400">{sub}</p>}
+    <div className="flex items-baseline gap-2">
+      <span className="font-display text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+        {value}
+      </span>
+      <span className="text-xs text-zinc-500">{label}</span>
     </div>
   );
 }
@@ -300,10 +299,12 @@ function VisitCard({
 
   return (
     <div
-      className={`rounded-xl border p-4 ${
-        isToday
-          ? "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"
-          : "border-zinc-100 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60"
+      className={`rounded-xl p-4 ${
+        isToday && data
+          ? "border border-zinc-200 border-l-4 border-l-emerald-500 bg-white shadow-sm dark:border-zinc-700 dark:border-l-emerald-500 dark:bg-zinc-900"
+          : isToday
+          ? "border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"
+          : "border border-zinc-100 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60"
       }`}
     >
       {/* Header row */}
@@ -426,7 +427,7 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+      className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 md:py-2 ${
         active
           ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
           : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -452,7 +453,7 @@ function TerritoryPanel({ territory }: { territory: Territory }) {
   return (
     <section>
       <SectionHeader title="Territory Intelligence" sub="Northeast" />
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {/* Trending objections */}
         <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">

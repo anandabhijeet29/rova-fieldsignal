@@ -6,6 +6,7 @@
  */
 
 import DashboardView from "@/components/DashboardView";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function DashboardPage() {
   return (
@@ -19,17 +20,18 @@ export default function DashboardPage() {
             </h1>
             <p className="text-xs text-zinc-500">Territory Intelligence Dashboard</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <span className="flex items-center gap-1 text-xs text-emerald-600">
               <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
               Live
             </span>
             <a
               href="/"
-              className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              className="rounded-lg bg-zinc-100 px-3 py-2.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-200 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
             >
               Rep View
             </a>
+            <ThemeToggle />
           </div>
         </div>
       </header>
