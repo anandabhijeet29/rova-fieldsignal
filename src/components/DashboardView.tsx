@@ -4,10 +4,9 @@
  * DashboardView — Manager dashboard with real-time updates (Step 7).
  *
  * Layout:
- *   - Today's summary stat bar (today-only numbers)
- *   - Today's visit cards (extracted sentiment, objections, follow-ups)
- *   - Per-HCP history accordion (most-recent prior visit per doctor)
- *   - Territory intelligence panels
+ *   - Always-visible today's summary stat bar
+ *   - Tab: "Today"   → today's visit cards + territory intel
+ *   - Tab: "History" → most-recent prior visit per HCP
  *
  * Updates within ~5s of each debrief completing (Supabase real-time).
  */
@@ -67,10 +66,13 @@ function calculateAvgSentiment(visits: VisitWithHcp[]): string {
 
 // ── main component ───────────────────────────────────────────────────
 
+type Tab = "today" | "history";
+
 export default function DashboardView() {
   const [visits, setVisits] = useState<VisitWithHcp[]>([]);
   const [territory, setTerritory] = useState<Territory | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<Tab>("today");
   const today = localToday();
 
   // Initial load — all visits + territory
@@ -133,9 +135,9 @@ export default function DashboardView() {
   );
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
 
-      {/* ── Today's summary bar ── */}
+      {/* ── Stat bar — always visible ── */}
       <div className="grid grid-cols-4 gap-4">
         <StatCard
           label="Today's Visits"
@@ -169,40 +171,64 @@ export default function DashboardView() {
         />
       </div>
 
-      {/* ── Today's visits ── */}
-      <section>
-        <SectionHeader title="Today's Visits" date={formatDate(today)} count={todayVisits.length} />
-        {todayVisits.length === 0 ? (
-          <EmptyState message="No visits scheduled for today." />
-        ) : (
-          <div className="space-y-3">
-            {todayVisits.map((v) => (
-              <VisitCard key={v.id} visit={v} showDate={false} isToday />
-            ))}
-          </div>
-        )}
-      </section>
+      {/* ── Tab bar ── */}
+      <div className="flex gap-1 rounded-xl border border-zinc-200 bg-zinc-50 p-1 dark:border-zinc-800 dark:bg-zinc-900">
+        <TabButton
+          label="Today"
+          badge={todayVisits.length}
+          active={activeTab === "today"}
+          onClick={() => setActiveTab("today")}
+        />
+        <TabButton
+          label="History"
+          badge={latestPerHcp.length}
+          active={activeTab === "history"}
+          onClick={() => setActiveTab("history")}
+        />
+      </div>
 
-      {/* ── Territory intelligence ── */}
-      {territory && <TerritoryPanel territory={territory} />}
+      {/* ── Tab: Today ── */}
+      {activeTab === "today" && (
+        <div className="space-y-8">
+          <section>
+            <SectionHeader title="Today's Visits" date={formatDate(today)} count={todayVisits.length} />
+            {todayVisits.length === 0 ? (
+              <EmptyState message="No visits scheduled for today." />
+            ) : (
+              <div className="space-y-3">
+                {todayVisits.map((v) => (
+                  <VisitCard key={v.id} visit={v} showDate={false} isToday />
+                ))}
+              </div>
+            )}
+          </section>
 
-      {/* ── Prior visit history (one card per HCP, most recent) ── */}
-      {latestPerHcp.length > 0 && (
+          {territory && <TerritoryPanel territory={territory} />}
+        </div>
+      )}
+
+      {/* ── Tab: History ── */}
+      {activeTab === "history" && (
         <section>
           <SectionHeader
             title="Prior Visit History"
             sub="Most recent completed visit per HCP"
             count={latestPerHcp.length}
           />
-          <div className="space-y-3">
-            {latestPerHcp
-              .sort((a, b) => b.visit_date.localeCompare(a.visit_date))
-              .map((v) => (
-                <VisitCard key={v.id} visit={v} showDate isToday={false} />
-              ))}
-          </div>
+          {latestPerHcp.length === 0 ? (
+            <EmptyState message="No prior visit history yet." />
+          ) : (
+            <div className="space-y-3">
+              {latestPerHcp
+                .sort((a, b) => b.visit_date.localeCompare(a.visit_date))
+                .map((v) => (
+                  <VisitCard key={v.id} visit={v} showDate isToday={false} />
+                ))}
+            </div>
+          )}
         </section>
       )}
+
     </div>
   );
 }
@@ -383,6 +409,42 @@ function VisitCard({
         )
       )}
     </div>
+  );
+}
+
+function TabButton({
+  label,
+  badge,
+  active,
+  onClick,
+}: {
+  label: string;
+  badge?: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+        active
+          ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
+          : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+      }`}
+    >
+      {label}
+      {badge !== undefined && badge > 0 && (
+        <span
+          className={`rounded-full px-1.5 py-0.5 text-xs ${
+            active
+              ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
+              : "bg-zinc-200 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400"
+          }`}
+        >
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }
 
