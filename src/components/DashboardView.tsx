@@ -276,10 +276,12 @@ function EmptyState({ message }: { message: string }) {
 }
 
 const STATUS_LABEL: Record<VisitStatus, { text: string; color: string }> = {
-  upcoming:   { text: "Upcoming",   color: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400" },
-  briefed:    { text: "Briefed",    color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
-  extracting: { text: "Processing", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
-  debriefed:  { text: "Complete",   color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
+  upcoming:     { text: "Upcoming",     color: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400" },
+  briefed:      { text: "Briefed",      color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
+  extracting:   { text: "Processing",   color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
+  debriefed:    { text: "Complete",     color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
+  skipped:      { text: "Skipped",      color: "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500" },
+  rescheduled:  { text: "Rescheduled",  color: "bg-blue-50 text-blue-500 dark:bg-blue-900/20 dark:text-blue-400" },
 };
 
 function VisitCard({

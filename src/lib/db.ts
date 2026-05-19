@@ -11,6 +11,7 @@ import type {
   ScheduledVisit,
   ExtractedData,
   BriefingContext,
+  VisitStatus,
 } from "./types";
 
 // ── Read operations (client-side safe) ──────────────────────────────
@@ -220,6 +221,136 @@ async function getCrossVisitContext(
   }
 
   return relevantSummaries.length > 0 ? relevantSummaries.join("\n\n") : null;
+}
+
+// ── Schedule management (client-side) ──────────────────────────────
+
+/**
+ * Get all HCPs for the add-visit dropdown.
+ */
+export async function getHcpList(): Promise<HCP[]> {
+  const { data, error } = await supabase
+    .from("hcps")
+    .select("*")
+    .order("name");
+
+  if (error) throw new Error(`HCP list fetch failed: ${error.message}`);
+  return (data ?? []) as HCP[];
+}
+
+/**
+ * Skip a missed visit — marks it in both tables.
+ */
+export async function skipVisit(visitId: string): Promise<void> {
+  await supabase
+    .from("rep_schedule")
+    .update({ status: "skipped" as VisitStatus })
+    .eq("id", visitId);
+  await supabase
+    .from("visits")
+    .update({ status: "skipped" as VisitStatus })
+    .eq("id", visitId);
+}
+
+/**
+ * Reschedule a missed visit to a new date.
+ * Marks original as "rescheduled", creates a new entry on the target date.
+ */
+export async function rescheduleVisit(
+  visitId: string,
+  newDate: string,
+  repId: string = "demo-rep"
+): Promise<string> {
+  // Get original visit details
+  const { data: original, error: fetchErr } = await supabase
+    .from("rep_schedule")
+    .select("*")
+    .eq("id", visitId)
+    .single();
+
+  if (fetchErr || !original) throw new Error("Visit not found");
+
+  // Determine next visit_order on the target date
+  const { data: existing } = await supabase
+    .from("rep_schedule")
+    .select("visit_order")
+    .eq("visit_date", newDate)
+    .eq("rep_id", repId)
+    .order("visit_order", { ascending: false })
+    .limit(1);
+
+  const nextOrder = ((existing?.[0] as { visit_order: number } | undefined)?.visit_order ?? 0) + 1;
+
+  // Mark original as rescheduled
+  await supabase
+    .from("rep_schedule")
+    .update({ status: "rescheduled" as VisitStatus })
+    .eq("id", visitId);
+  await supabase
+    .from("visits")
+    .update({ status: "rescheduled" as VisitStatus })
+    .eq("id", visitId);
+
+  // Create new entry on target date
+  const newId = crypto.randomUUID();
+  await supabase.from("rep_schedule").insert({
+    id: newId,
+    rep_id: repId,
+    visit_date: newDate,
+    visit_order: nextOrder,
+    hcp_id: original.hcp_id,
+    status: "upcoming",
+    region: original.region,
+  });
+  await supabase.from("visits").insert({
+    id: newId,
+    hcp_id: original.hcp_id,
+    visit_date: newDate,
+    visit_order: nextOrder,
+    status: "upcoming",
+  });
+
+  return newId;
+}
+
+/**
+ * Add a new visit to the schedule.
+ */
+export async function addVisitToSchedule(
+  hcpId: string,
+  visitDate: string,
+  region: string = "northeast",
+  repId: string = "demo-rep"
+): Promise<string> {
+  const { data: existing } = await supabase
+    .from("rep_schedule")
+    .select("visit_order")
+    .eq("visit_date", visitDate)
+    .eq("rep_id", repId)
+    .order("visit_order", { ascending: false })
+    .limit(1);
+
+  const nextOrder = ((existing?.[0] as { visit_order: number } | undefined)?.visit_order ?? 0) + 1;
+  const newId = crypto.randomUUID();
+
+  await supabase.from("rep_schedule").insert({
+    id: newId,
+    rep_id: repId,
+    visit_date: visitDate,
+    visit_order: nextOrder,
+    hcp_id: hcpId,
+    status: "upcoming",
+    region,
+  });
+  await supabase.from("visits").insert({
+    id: newId,
+    hcp_id: hcpId,
+    visit_date: visitDate,
+    visit_order: nextOrder,
+    status: "upcoming",
+  });
+
+  return newId;
 }
 
 // ── Real-time subscriptions ─────────────────────────────────────────

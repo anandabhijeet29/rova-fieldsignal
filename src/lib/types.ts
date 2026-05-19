@@ -83,7 +83,7 @@ export interface PrescriptionTrend {
 
 // ── Status types ────────────────────────────────────────────────────
 
-export type VisitStatus = "upcoming" | "briefed" | "extracting" | "debriefed";
+export type VisitStatus = "upcoming" | "briefed" | "extracting" | "debriefed" | "skipped" | "rescheduled";
 
 // ── Voice agent types ───────────────────────────────────────────────
 
