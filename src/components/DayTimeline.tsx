@@ -16,12 +16,8 @@ import {
   getDaySchedule,
   getHcpBriefing,
   getHcpList,
-  rescheduleVisit,
-  skipVisit,
-  addVisitToSchedule,
   subscribeToScheduleChanges,
 } from "@/lib/db";
-import { supabase } from "@/lib/supabase";
 import type { HCP, ScheduledVisit, BriefingContext, VisitStatus } from "@/lib/types";
 
 interface DayTimelineProps {
@@ -171,8 +167,12 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
   const handleBriefingComplete = useCallback(async () => {
     if (!activeVisitId) return;
     try {
-      await supabase.from("rep_schedule").update({ status: "briefed" }).eq("id", activeVisitId);
-      await supabase.from("visits").update({ status: "briefed" }).eq("id", activeVisitId);
+      const res = await fetch("/api/visit/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visit_id: activeVisitId, status: "briefed" }),
+      });
+      if (!res.ok) throw new Error("Status update failed");
       setSchedule((prev) =>
         prev.map((v) =>
           v.id === activeVisitId ? { ...v, status: "briefed" as VisitStatus } : v
@@ -223,7 +223,12 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
   const handleReschedule = useCallback(
     async (visitId: string, newDate: string) => {
       try {
-        await rescheduleVisit(visitId, newDate);
+        const res = await fetch("/api/schedule/reschedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ visit_id: visitId, new_date: newDate }),
+        });
+        if (!res.ok) throw new Error("Reschedule failed");
         setSchedule((prev) =>
           prev.map((v) =>
             v.id === visitId ? { ...v, status: "rescheduled" as VisitStatus } : v
@@ -241,7 +246,12 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
 
   const handleSkip = useCallback(async (visitId: string) => {
     try {
-      await skipVisit(visitId);
+      const res = await fetch("/api/schedule/skip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visit_id: visitId }),
+      });
+      if (!res.ok) throw new Error("Skip failed");
       setSchedule((prev) =>
         prev.map((v) =>
           v.id === visitId ? { ...v, status: "skipped" as VisitStatus } : v
@@ -256,8 +266,12 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
   const handleAddVisit = useCallback(async () => {
     if (!addHcpId || !addDate) return;
     try {
-      await addVisitToSchedule(addHcpId, addDate);
-      // Reload schedule if adding to current view
+      const res = await fetch("/api/schedule/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hcp_id: addHcpId, visit_date: addDate }),
+      });
+      if (!res.ok) throw new Error("Add visit failed");
       if (addDate === currentDate) {
         const data = await getDaySchedule(currentDate);
         setSchedule(data);
