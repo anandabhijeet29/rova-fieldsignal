@@ -1,14 +1,12 @@
 "use client";
 
 /**
- * DashboardView — Manager dashboard with real-time updates (Step 7).
+ * DashboardView — Manager dashboard with real-time updates.
  *
- * Layout:
- *   - Always-visible today's summary stat bar
- *   - Tab: "Today"   → today's visit cards + territory intel
- *   - Tab: "History" → most-recent prior visit per HCP
- *
- * Updates within ~5s of each debrief completing (Supabase real-time).
+ * Tab: "Today"   → today's visit cards + territory intel
+ * Tab: "History" → most-recent completed visit per HCP
+ * Metrics strip always reflects today's numbers.
+ * Real-time updates merge into state on either tab.
  */
 
 import { useState, useEffect } from "react";
@@ -20,7 +18,9 @@ interface VisitWithHcp extends Visit {
   hcp: HCP;
 }
 
-// ── helpers ──────────────────────────────────────────────────────────
+// ── Date helpers ─────────────────────────────────────────────────────
+
+type Tab = "today" | "history";
 
 function localToday(): string {
   const now = new Date();
@@ -64,9 +64,7 @@ function calculateAvgSentiment(visits: VisitWithHcp[]): string {
   return "Neutral";
 }
 
-// ── main component ───────────────────────────────────────────────────
-
-type Tab = "today" | "history";
+// ── Main component ───────────────────────────────────────────────────
 
 export default function DashboardView() {
   const [visits, setVisits] = useState<VisitWithHcp[]>([]);
@@ -75,7 +73,7 @@ export default function DashboardView() {
   const [activeTab, setActiveTab] = useState<Tab>("today");
   const today = localToday();
 
-  // Initial load — all visits + territory
+  // Initial load — all visits + territory (filtered client-side)
   useEffect(() => {
     async function load() {
       const [visitsRes, territoryRes] = await Promise.all([
@@ -86,7 +84,6 @@ export default function DashboardView() {
           .order("visit_order", { ascending: true }),
         supabase.from("territory").select("*").limit(1).single(),
       ]);
-
       if (visitsRes.data) {
         setVisits(
           visitsRes.data.map((v: Record<string, unknown>) => ({
@@ -101,7 +98,7 @@ export default function DashboardView() {
     load();
   }, []);
 
-  // Real-time — merge updated row back into state
+  // Real-time — merge updated row back into state for any period
   useEffect(() => {
     const unsubscribe = subscribeToVisitChanges(today, (updated) => {
       const u = updated as unknown as Visit;
@@ -124,7 +121,7 @@ export default function DashboardView() {
   const historyVisits = visits.filter((v) => v.visit_date !== today);
   const todayDebriefed = todayVisits.filter((v) => v.status === "debriefed");
 
-  // Most-recent prior visit per HCP (for history section)
+  // Most-recent prior visit per HCP for history tab
   const latestPerHcp = Object.values(
     historyVisits.reduce<Record<string, VisitWithHcp>>((acc, v) => {
       if (!acc[v.hcp_id] || v.visit_date > acc[v.hcp_id].visit_date) {
@@ -137,15 +134,15 @@ export default function DashboardView() {
   return (
     <div className="space-y-6 pb-20 md:pb-0">
 
-      {/* ── Inline metrics strip — always visible ── */}
+      {/* ── Inline metrics strip — always today's numbers ── */}
       <div className="flex flex-wrap items-baseline gap-x-8 gap-y-3 border-b border-zinc-200 pb-5 dark:border-zinc-800">
         <MetricStat
           value={`${todayDebriefed.length}/${todayVisits.length}`}
-          label="debriefed"
+          label="debriefed today"
         />
         <MetricStat
           value={calculateAvgSentiment(todayDebriefed)}
-          label="sentiment"
+          label="avg sentiment"
         />
         <MetricStat
           value={String(
@@ -167,7 +164,7 @@ export default function DashboardView() {
         />
       </div>
 
-      {/* ── Tab bar — fixed bottom on mobile, inline on desktop (D8) ── */}
+      {/* ── Tab bar — fixed bottom on mobile, inline on desktop ── */}
       <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-zinc-200 bg-white/95 px-4 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-sm md:static md:z-auto md:border-t-0 md:bg-transparent md:px-0 md:pb-0 md:pt-0 md:backdrop-blur-none dark:border-zinc-800 dark:bg-zinc-900/95 md:dark:bg-transparent">
         <div className="flex gap-1 md:rounded-xl md:border md:border-zinc-200 md:bg-zinc-50 md:p-1 md:dark:border-zinc-800 md:dark:bg-zinc-900">
           <TabButton
@@ -210,7 +207,7 @@ export default function DashboardView() {
         <section>
           <SectionHeader
             title="Prior Visit History"
-            sub="Most recent completed visit per HCP"
+            sub="Most recent visit per HCP"
             count={latestPerHcp.length}
           />
           {latestPerHcp.length === 0 ? (
@@ -253,7 +250,7 @@ function SectionHeader({
         )}
       </h3>
       <span className="text-xs text-zinc-400">
-        {sub && `${sub} · `}{count !== undefined && `${count} records`}
+        {sub && `${sub} · `}{count !== undefined && `${count} visit${count !== 1 ? "s" : ""}`}
       </span>
     </div>
   );
@@ -325,10 +322,9 @@ function VisitCard({
         </span>
       </div>
 
-      {/* Extracted data grid */}
+      {/* Extracted data */}
       {data ? (
         <div className="mt-3 space-y-2">
-          {/* Metrics row */}
           <div className="flex gap-6 text-xs">
             <span>
               <span className="text-zinc-400">Sentiment </span>
@@ -356,37 +352,28 @@ function VisitCard({
             </span>
           </div>
 
-          {/* Objections */}
           {data.objections.length > 0 && (
             <div className="flex flex-wrap items-center gap-1">
               <span className="text-xs text-zinc-400">Objections:</span>
               {data.objections.map((o, i) => (
-                <span
-                  key={i}
-                  className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-300"
-                >
+                <span key={i} className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-300">
                   {o}
                 </span>
               ))}
             </div>
           )}
 
-          {/* Competitive intel */}
           {data.competitive_intel.length > 0 && (
             <div className="flex flex-wrap items-center gap-1">
               <span className="text-xs text-zinc-400">Competitive:</span>
               {data.competitive_intel.map((c, i) => (
-                <span
-                  key={i}
-                  className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                >
+                <span key={i} className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
                   {c}
                 </span>
               ))}
             </div>
           )}
 
-          {/* Follow-up actions */}
           {data.follow_ups.length > 0 && (
             <div className="mt-1 space-y-0.5">
               <span className="text-xs text-zinc-400">Follow-up actions:</span>
@@ -404,7 +391,7 @@ function VisitCard({
         </div>
       ) : (
         visit.status !== "upcoming" && (
-          <p className="mt-2 text-xs text-zinc-400 italic">
+          <p className="mt-2 text-xs italic text-zinc-400">
             {visit.status === "extracting" ? "Processing debrief…" : "No extracted data available."}
           </p>
         )
@@ -427,7 +414,7 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 md:py-2 ${
+      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-3 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 md:px-4 md:py-2 md:text-sm ${
         active
           ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
           : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -465,15 +452,10 @@ function TerritoryPanel({ territory }: { territory: Territory }) {
                 <span className="text-zinc-700 dark:text-zinc-300">{obj.objection}</span>
                 <span
                   className={`text-xs font-medium ${
-                    obj.trend === "rising"
-                      ? "text-red-600"
-                      : obj.trend === "declining"
-                      ? "text-emerald-600"
-                      : "text-zinc-500"
+                    obj.trend === "rising" ? "text-red-600" : obj.trend === "declining" ? "text-emerald-600" : "text-zinc-500"
                   }`}
                 >
-                  {obj.trend === "rising" ? "↑" : obj.trend === "declining" ? "↓" : "→"}{" "}
-                  {obj.count}
+                  {obj.trend === "rising" ? "↑" : obj.trend === "declining" ? "↓" : "→"} {obj.count}
                 </span>
               </div>
             ))}
@@ -489,9 +471,7 @@ function TerritoryPanel({ territory }: { territory: Territory }) {
             {territory.competitive_mentions.map((comp, i) => (
               <div key={i} className="text-sm">
                 <div className="flex items-center justify-between">
-                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                    {comp.competitor}
-                  </span>
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">{comp.competitor}</span>
                   <span className="text-xs text-zinc-500">{comp.mentions} mentions</span>
                 </div>
                 <p className="text-xs text-zinc-500">{comp.context}</p>
@@ -511,15 +491,10 @@ function TerritoryPanel({ territory }: { territory: Territory }) {
                 <span className="text-zinc-700 dark:text-zinc-300">{trend.drug_class}</span>
                 <span
                   className={`text-xs font-medium ${
-                    trend.trend === "up"
-                      ? "text-emerald-600"
-                      : trend.trend === "down"
-                      ? "text-red-600"
-                      : "text-zinc-500"
+                    trend.trend === "up" ? "text-emerald-600" : trend.trend === "down" ? "text-red-600" : "text-zinc-500"
                   }`}
                 >
-                  {trend.trend === "up" ? "↑" : trend.trend === "down" ? "↓" : "→"}{" "}
-                  {Math.round(trend.intent_rate * 100)}%
+                  {trend.trend === "up" ? "↑" : trend.trend === "down" ? "↓" : "→"} {Math.round(trend.intent_rate * 100)}%
                 </span>
               </div>
             ))}

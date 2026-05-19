@@ -1,17 +1,15 @@
 "use client";
 
 /**
- * DayTimeline — 4-visit day timeline for the demo harness (Step 5).
+ * DayTimeline — rep's daily visit schedule with date navigation.
  *
- * Shows the rep's daily schedule with status indicators.
- * Mode switching based on visit status:
- *   upcoming  -> click Start -> briefing mode
- *   briefed   -> click Start -> debrief mode
- *   extracting -> show processing indicator
- *   debriefed  -> show completed checkmark
+ * Date navigation: ‹ prev day / next day › arrows + "Today" shortcut.
+ * Future dates: Brief/Debrief CTAs replaced with "Scheduled" chip.
+ * Past unactioned visits: "Missed" chip.
+ * Real-time subscription only active for today.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import VoiceWidget from "./VoiceWidget";
 import CrossVisitCard from "./CrossVisitCard";
 import { getDaySchedule, getHcpBriefing, subscribeToScheduleChanges } from "@/lib/db";
@@ -19,17 +17,24 @@ import { supabase } from "@/lib/supabase";
 import type { ScheduledVisit, BriefingContext, VisitStatus } from "@/lib/types";
 
 interface DayTimelineProps {
-  visitDate: string;
+  visitDate: string; // initial date passed from page (today's ISO string)
 }
 
 const STATUS_CONFIG: Record<VisitStatus, { label: string; color: string; icon: string }> = {
-  upcoming: { label: "Upcoming", color: "bg-zinc-100 text-zinc-600", icon: "○" },
-  briefed: { label: "Briefed", color: "bg-blue-100 text-blue-700", icon: "◐" },
-  extracting: { label: "Processing", color: "bg-amber-100 text-amber-700", icon: "⟳" },
-  debriefed: { label: "Complete", color: "bg-emerald-100 text-emerald-700", icon: "●" },
+  upcoming:   { label: "Upcoming",   color: "bg-zinc-100 text-zinc-600",            icon: "○" },
+  briefed:    { label: "Briefed",    color: "bg-blue-100 text-blue-700",            icon: "◐" },
+  extracting: { label: "Processing", color: "bg-amber-100 text-amber-700",          icon: "⟳" },
+  debriefed:  { label: "Complete",   color: "bg-emerald-100 text-emerald-700",      icon: "●" },
 };
 
+function dateToISO(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export default function DayTimeline({ visitDate }: DayTimelineProps) {
+  const todayISO = useMemo(() => dateToISO(new Date()), []);
+
+  const [currentDate, setCurrentDate] = useState(visitDate);
   const [schedule, setSchedule] = useState<ScheduledVisit[]>([]);
   const [activeVisitId, setActiveVisitId] = useState<string | null>(null);
   const [briefingContext, setBriefingContext] = useState<BriefingContext | null>(null);
@@ -37,11 +42,46 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
   const [error, setError] = useState<string | null>(null);
   const [recentlyCompletedId, setRecentlyCompletedId] = useState<string | null>(null);
 
-  // Load daily schedule
+  const isToday = currentDate === todayISO;
+  const isFuture = currentDate > todayISO;
+  const isPast = currentDate < todayISO;
+
+  // ── Date navigation ──────────────────────────────────────────────────
+
+  const goToDate = useCallback((iso: string) => {
+    setCurrentDate(iso);
+    setActiveVisitId(null);
+    setBriefingContext(null);
+    setRecentlyCompletedId(null);
+  }, []);
+
+  function navigate(direction: -1 | 1) {
+    const d = new Date(currentDate + "T00:00:00");
+    d.setDate(d.getDate() + direction);
+    goToDate(dateToISO(d));
+  }
+
+  function formatCurrentDate(): string {
+    if (isToday) return "Today";
+    const d = new Date(currentDate + "T00:00:00");
+    const tomorrow = new Date(todayISO + "T00:00:00");
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    if (currentDate === dateToISO(tomorrow)) return "Tomorrow";
+    const yesterday = new Date(todayISO + "T00:00:00");
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (currentDate === dateToISO(yesterday)) return "Yesterday";
+    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  }
+
+  // ── Load schedule on date change ─────────────────────────────────────
+
   useEffect(() => {
+    setLoading(true);
+    setError(null);
+    setSchedule([]);
     async function loadSchedule() {
       try {
-        const data = await getDaySchedule(visitDate);
+        const data = await getDaySchedule(currentDate);
         setSchedule(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load schedule");
@@ -50,11 +90,13 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
       }
     }
     loadSchedule();
-  }, [visitDate]);
+  }, [currentDate]);
 
-  // Subscribe to real-time status changes
+  // ── Real-time updates — only for today ───────────────────────────────
+
   useEffect(() => {
-    const unsubscribe = subscribeToScheduleChanges(visitDate, (updated) => {
+    if (!isToday) return;
+    const unsubscribe = subscribeToScheduleChanges(currentDate, (updated) => {
       const uid = (updated as { id: string }).id;
       const newStatus = (updated as { status: VisitStatus }).status;
       setSchedule((prev) =>
@@ -62,18 +104,17 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
           visit.id === uid ? { ...visit, status: newStatus } : visit
         )
       );
-      // Clear "Got it" card once extraction finishes
       if (newStatus === "debriefed") {
         setRecentlyCompletedId((prev) => (prev === uid ? null : prev));
       }
     });
     return unsubscribe;
-  }, [visitDate]);
+  }, [currentDate, isToday]);
 
-  // Handle starting a briefing
+  // ── Visit action handlers ────────────────────────────────────────────
+
   const handleStartBriefing = useCallback(async (visit: ScheduledVisit) => {
     try {
-      // Prefetch pattern: HCP data + signed URL in parallel (D9)
       const context = await getHcpBriefing(visit.hcp_id);
       setBriefingContext(context);
       setActiveVisitId(visit.id);
@@ -83,26 +124,16 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
     }
   }, []);
 
-  // Handle starting a debrief
   const handleStartDebrief = useCallback((visit: ScheduledVisit) => {
     setBriefingContext(null);
     setActiveVisitId(visit.id);
   }, []);
 
-  // Handle briefing completion — update status to 'briefed'
   const handleBriefingComplete = useCallback(async () => {
     if (!activeVisitId) return;
     try {
-      // Update via API to ensure both tables stay in sync
-      await supabase
-        .from("rep_schedule")
-        .update({ status: "briefed" })
-        .eq("id", activeVisitId);
-      await supabase
-        .from("visits")
-        .update({ status: "briefed" })
-        .eq("id", activeVisitId);
-
+      await supabase.from("rep_schedule").update({ status: "briefed" }).eq("id", activeVisitId);
+      await supabase.from("visits").update({ status: "briefed" }).eq("id", activeVisitId);
       setSchedule((prev) =>
         prev.map((v) =>
           v.id === activeVisitId ? { ...v, status: "briefed" as VisitStatus } : v
@@ -115,20 +146,16 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
     setBriefingContext(null);
   }, [activeVisitId]);
 
-  // Handle debrief completion — POST to /api/debrief
   const handleDebriefComplete = useCallback(
     async (transcript: string) => {
       if (!activeVisitId) return;
       const visit = schedule.find((v) => v.id === activeVisitId);
       if (!visit) return;
 
-      // Show "Got it" confirmation immediately (D3)
       setRecentlyCompletedId(activeVisitId);
       setSchedule((prev) =>
         prev.map((v) =>
-          v.id === activeVisitId
-            ? { ...v, status: "extracting" as VisitStatus }
-            : v
+          v.id === activeVisitId ? { ...v, status: "extracting" as VisitStatus } : v
         )
       );
       setActiveVisitId(null);
@@ -143,9 +170,7 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
             transcript,
           }),
         });
-
         if (!res.ok) throw new Error("Debrief API failed");
-        // Real-time subscription will update status to "debriefed"
       } catch (err) {
         console.error("Debrief submission failed:", err);
         setError("Failed to save debrief. Your recording is safe — try again.");
@@ -153,6 +178,8 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
     },
     [activeVisitId, schedule]
   );
+
+  // ── Render ───────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -170,27 +197,62 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
     );
   }
 
-  // Identify next actionable visit for hero treatment (D2)
   const nextVisitId = schedule.find(
     (v) => v.status === "upcoming" || v.status === "briefed"
   )?.id;
 
   return (
     <div className="space-y-4">
+
+      {/* ── Header: date navigation ── */}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-          Today&apos;s Visits
-        </h2>
-        <span className="text-sm text-zinc-500">
-          {schedule.filter((v) => v.status === "debriefed").length}/{schedule.length} complete
-        </span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => navigate(-1)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            aria-label="Previous day"
+          >
+            ‹
+          </button>
+          <h2 className="px-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            {formatCurrentDate()}
+          </h2>
+          <button
+            onClick={() => navigate(1)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            aria-label="Next day"
+          >
+            ›
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {!isToday && (
+            <button
+              onClick={() => goToDate(todayISO)}
+              className="rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-100 focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30"
+            >
+              Today
+            </button>
+          )}
+          <span className="text-sm text-zinc-500">
+            {schedule.filter((v) => v.status === "debriefed").length}/{schedule.length} complete
+          </span>
+        </div>
       </div>
 
-      {/* Empty state */}
+      {/* ── Future-date info banner ── */}
+      {isFuture && (
+        <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-900/30 dark:bg-blue-900/10 dark:text-blue-400">
+          Viewing upcoming schedule — visit actions unlock on the day.
+        </div>
+      )}
+
+      {/* ── Empty state ── */}
       {schedule.length === 0 && (
         <div className="rounded-xl border border-dashed border-zinc-300 p-8 text-center dark:border-zinc-700">
           <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-            No visits scheduled for today
+            No visits scheduled {isToday ? "for today" : `for ${formatCurrentDate().toLowerCase()}`}
           </p>
           <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
             Import your schedule or check back when visits are assigned.
@@ -198,7 +260,7 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
         </div>
       )}
 
-      {/* Timeline */}
+      {/* ── Timeline ── */}
       <div className="space-y-2">
         {schedule.map((visit, index) => {
           const statusConfig = STATUS_CONFIG[visit.status];
@@ -207,7 +269,7 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
           const isCompleted = visit.status === "debriefed";
           const agentMode = visit.status === "upcoming" ? "briefing" : "debrief";
 
-          {/* ── Completed visits: slim summary row (D2) ── */}
+          {/* ── Completed visits: slim summary row ── */}
           if (isCompleted && !isActive) {
             return (
               <div key={visit.id} className="relative">
@@ -218,18 +280,14 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
                     ✓
                   </div>
-                  <span className="text-sm text-zinc-500 dark:text-zinc-400">
-                    {visit.hcp.name}
-                  </span>
-                  <span className="ml-auto text-xs text-emerald-600 dark:text-emerald-400">
-                    Complete
-                  </span>
+                  <span className="text-sm text-zinc-500 dark:text-zinc-400">{visit.hcp.name}</span>
+                  <span className="ml-auto text-xs text-emerald-600 dark:text-emerald-400">Complete</span>
                 </div>
               </div>
             );
           }
 
-          {/* ── "Got it" confirmation after debrief (D3) ── */}
+          {/* ── "Got it" confirmation after debrief ── */}
           if (visit.id === recentlyCompletedId && visit.status === "extracting") {
             return (
               <div key={visit.id} className="relative">
@@ -256,7 +314,7 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
             );
           }
 
-          {/* ── Next visit (hero) / Active / Default card ── */}
+          {/* ── Main visit card ── */}
           return (
             <div key={visit.id} className="relative">
               {index < schedule.length - 1 && (
@@ -273,7 +331,7 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
                     ? "border border-emerald-300 bg-emerald-50/50 p-4 shadow-sm dark:border-emerald-800 dark:bg-emerald-900/10"
                     : isNext
                     ? "border border-zinc-200 border-l-4 border-l-blue-500 bg-white p-5 shadow-sm dark:border-zinc-700 dark:border-l-blue-500 dark:bg-zinc-900"
-                    : "border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
+                    : "border border-zinc-200 bg-white p-4 hover:border-zinc-300 hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600"
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -289,7 +347,7 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
                   </div>
 
                   {/* Visit info */}
-                  <div className="flex-1 min-w-0">
+                  <div className="min-w-0 flex-1">
                     <h3
                       className={`font-semibold text-zinc-900 dark:text-zinc-100 ${
                         isNext ? "text-base" : "text-sm"
@@ -302,50 +360,68 @@ export default function DayTimeline({ visitDate }: DayTimelineProps) {
                     </p>
                   </div>
 
-                  {/* Status badge — only when no CTA button is shown */}
-                  {visit.status !== "upcoming" && visit.status !== "briefed" && (
-                    <span
-                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${statusConfig.color}`}
-                    >
-                      {statusConfig.icon} {statusConfig.label}
-                    </span>
-                  )}
-
-                  {/* Action button */}
-                  {(visit.status === "upcoming" || visit.status === "briefed") &&
-                    !isActive && (
-                      <button
-                        onClick={() =>
-                          visit.status === "upcoming"
-                            ? handleStartBriefing(visit)
-                            : handleStartDebrief(visit)
-                        }
-                        className={`shrink-0 rounded-lg font-medium text-white transition-colors hover:bg-blue-700 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
-                          isNext
-                            ? "bg-blue-600 px-5 py-3 text-sm"
-                            : "bg-blue-600 px-4 py-2.5 text-sm"
-                        }`}
-                      >
-                        {visit.status === "upcoming" ? "Brief" : "Debrief"}
-                      </button>
-                    )}
-
-                  {visit.status === "extracting" && (
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-amber-600 border-t-transparent" />
-                  )}
+                  {/* Right side: context-aware action / badge */}
+                  {!isActive && (() => {
+                    // Processing spinner
+                    if (visit.status === "extracting") {
+                      return (
+                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-amber-600 border-t-transparent" />
+                      );
+                    }
+                    // Future date: scheduled chip (no CTA)
+                    if (isFuture && (visit.status === "upcoming" || visit.status === "briefed")) {
+                      return (
+                        <span className="shrink-0 rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                          Scheduled
+                        </span>
+                      );
+                    }
+                    // Past + still upcoming: missed
+                    if (isPast && visit.status === "upcoming") {
+                      return (
+                        <span className="shrink-0 rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-red-500 dark:bg-red-900/20 dark:text-red-400">
+                          Missed
+                        </span>
+                      );
+                    }
+                    // Past + briefed or any non-today non-actionable: status badge
+                    if (!isToday) {
+                      return (
+                        <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${statusConfig.color}`}>
+                          {statusConfig.icon} {statusConfig.label}
+                        </span>
+                      );
+                    }
+                    // Today + upcoming or briefed: action button
+                    if (visit.status === "upcoming" || visit.status === "briefed") {
+                      return (
+                        <button
+                          onClick={() =>
+                            visit.status === "upcoming"
+                              ? handleStartBriefing(visit)
+                              : handleStartDebrief(visit)
+                          }
+                          className={`shrink-0 rounded-lg bg-blue-600 font-medium text-white transition-colors hover:bg-blue-700 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
+                            isNext ? "px-5 py-3 text-sm" : "px-4 py-2.5 text-sm"
+                          }`}
+                        >
+                          {visit.status === "upcoming" ? "Brief" : "Debrief"}
+                        </button>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
-                {/* Cross-visit intelligence (D4) — shown before briefing */}
-                {isActive &&
-                  agentMode === "briefing" &&
-                  briefingContext?.crossVisitContext && (
-                    <div className="mt-3">
-                      <CrossVisitCard
-                        context={briefingContext.crossVisitContext}
-                        variant="pre-briefing"
-                      />
-                    </div>
-                  )}
+                {/* Cross-visit intelligence before briefing */}
+                {isActive && agentMode === "briefing" && briefingContext?.crossVisitContext && (
+                  <div className="mt-3">
+                    <CrossVisitCard
+                      context={briefingContext.crossVisitContext}
+                      variant="pre-briefing"
+                    />
+                  </div>
+                )}
 
                 {/* Active voice widget */}
                 {isActive && (
